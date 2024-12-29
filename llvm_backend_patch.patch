@@ -1,0 +1,473 @@
+From 6601e34352006e84a3a5b79d885011ed65e9b9a8 Mon Sep 17 00:00:00 2001
+From: Clemens Jonischkeit <iead@leaddev.de>
+Date: Fri, 15 Nov 2024 13:30:47 +0100
+Subject: [PATCH] added LEG-backend llvm+clang
+
+---
+ clang/include/clang/Basic/Attr.td             |  1 +
+ clang/lib/Basic/CMakeLists.txt                |  1 +
+ clang/lib/Basic/Targets.cpp                   |  4 +
+ clang/lib/Basic/Targets/LEG.cpp               | 17 +++++
+ clang/lib/Basic/Targets/LEG.h                 | 75 +++++++++++++++++++
+ clang/lib/CodeGen/TargetInfo.cpp              | 17 +++++
+ clang/lib/Driver/Driver.cpp                   |  3 +
+ clang/lib/Driver/ToolChains/CommonArgs.cpp    |  3 +
+ clang/lib/Driver/ToolChains/Gnu.cpp           |  8 ++
+ llvm/include/llvm/BinaryFormat/ELF.h          |  5 ++
+ .../llvm/BinaryFormat/ELFRelocs/LEG.def       |  8 ++
+ llvm/include/llvm/Object/ELFObjectFile.h      |  4 +
+ llvm/include/llvm/TargetParser/Triple.h       |  1 +
+ llvm/lib/BinaryFormat/ELF.cpp                 |  3 +
+ llvm/lib/Object/ELF.cpp                       |  7 ++
+ llvm/lib/TargetParser/Triple.cpp              | 11 +++
+ 16 files changed, 168 insertions(+)
+ create mode 100644 clang/lib/Basic/Targets/LEG.cpp
+ create mode 100644 clang/lib/Basic/Targets/LEG.h
+ create mode 100644 llvm/include/llvm/BinaryFormat/ELFRelocs/LEG.def
+
+diff --git a/clang/include/clang/Basic/Attr.td b/clang/include/clang/Basic/Attr.td
+index d449a2fe7..5f6187ce7 100644
+--- a/clang/include/clang/Basic/Attr.td
++++ b/clang/include/clang/Basic/Attr.td
+@@ -405,6 +405,7 @@ def TargetAnyMips : TargetArch<["mips", "mipsel", "mips64", "mips64el"]>;
+ def TargetMSP430 : TargetArch<["msp430"]>;
+ def TargetM68k : TargetArch<["m68k"]>;
+ def TargetRISCV : TargetArch<["riscv32", "riscv64"]>;
++def TargetLEG : TargetArch<["leg"]>;
+ def TargetX86 : TargetArch<["x86"]>;
+ def TargetAnyX86 : TargetArch<["x86", "x86_64"]>;
+ def TargetWebAssembly : TargetArch<["wasm32", "wasm64"]>;
+diff --git a/clang/lib/Basic/CMakeLists.txt b/clang/lib/Basic/CMakeLists.txt
+index 32af83ee2..319fa7f9d 100644
+--- a/clang/lib/Basic/CMakeLists.txt
++++ b/clang/lib/Basic/CMakeLists.txt
+@@ -83,6 +83,7 @@ add_clang_library(clangBasic
+   Targets/Hexagon.cpp
+   Targets/Lanai.cpp
+   Targets/Le64.cpp
++  Targets/LEG.cpp
+   Targets/LoongArch.cpp
+   Targets/M68k.cpp
+   Targets/MSP430.cpp
+diff --git a/clang/lib/Basic/Targets.cpp b/clang/lib/Basic/Targets.cpp
+index 8400774db..dc898b0f0 100644
+--- a/clang/lib/Basic/Targets.cpp
++++ b/clang/lib/Basic/Targets.cpp
+@@ -24,6 +24,7 @@
+ #include "Targets/Hexagon.h"
+ #include "Targets/Lanai.h"
+ #include "Targets/Le64.h"
++#include "Targets/LEG.h"
+ #include "Targets/LoongArch.h"
+ #include "Targets/M68k.h"
+ #include "Targets/MSP430.h"
+@@ -428,6 +429,9 @@ TargetInfo *AllocateTarget(const llvm::Triple &Triple,
+       return new RISCV64TargetInfo(Triple, Opts);
+     }
+ 
++  case llvm::Triple::leg:
++    return new LEGTargetInfo(Triple, Opts);
++
+   case llvm::Triple::sparc:
+     switch (os) {
+     case llvm::Triple::Linux:
+diff --git a/clang/lib/Basic/Targets/LEG.cpp b/clang/lib/Basic/Targets/LEG.cpp
+new file mode 100644
+index 000000000..0c8293f3d
+--- /dev/null
++++ b/clang/lib/Basic/Targets/LEG.cpp
+@@ -0,0 +1,17 @@
++#include "LEG.h"
++#include "clang/Basic/MacroBuilder.h"
++#include "llvm/ADT/StringSwitch.h"
++
++using namespace clang;
++using namespace clang::targets;
++
++namespace clang {
++namespace targets {
++void LEGTargetInfo::getTargetDefines(const LangOptions &Opts, MacroBuilder &Builder) const {
++	Builder.defineMacro("LEG");
++	Builder.defineMacro("__LEG");
++	Builder.defineMacro("__LEG__");
++	Builder.defineMacro("__ELF__");
++}
++}
++}
+\ No newline at end of file
+diff --git a/clang/lib/Basic/Targets/LEG.h b/clang/lib/Basic/Targets/LEG.h
+new file mode 100644
+index 000000000..7509f63e3
+--- /dev/null
++++ b/clang/lib/Basic/Targets/LEG.h
+@@ -0,0 +1,75 @@
++#ifndef LLVM_CLANG_LIB_BASIC_TARGETS_LEG_H
++#define LLVM_CLANG_LIB_BASIC_TARGETS_LEG_H
++
++#include "clang/Basic/TargetInfo.h"
++#include "clang/Basic/TargetOptions.h"
++#include "llvm/ADT/Triple.h"
++#include "llvm/Support/Compiler.h"
++
++namespace clang {
++namespace targets {
++
++// LEG Target
++class LEGTargetInfo : public TargetInfo {
++protected:
++  std::string ABI, CPU;
++
++public:
++  LEGTargetInfo(const llvm::Triple &Triple, const TargetOptions &)
++      : TargetInfo(Triple) {
++    TLSSupported = false;
++    HasLongDouble = false;
++    PointerWidth = PointerAlign = 64;
++    resetDataLayout("e-m:e-p:64:64-i64:64-i128:128-n32:64-S128");
++  }
++
++  bool setCPU(const std::string &Name) override {
++    if (!isValidCPUName(Name))
++      return false;
++    CPU = Name;
++    return true;
++  }
++
++  StringRef getABI() const override { return ABI; }
++  void getTargetDefines(const LangOptions &Opts,
++                        MacroBuilder &Builder) const override;
++
++  ArrayRef<Builtin::Info> getTargetBuiltins() const override { return std::nullopt; }
++
++  BuiltinVaListKind getBuiltinVaListKind() const override {
++    return TargetInfo::VoidPtrBuiltinVaList;
++  }
++
++  const char *getClobbers() const override { return ""; }
++
++  StringRef getConstraintRegister(StringRef Constraint,
++                                  StringRef Expression) const override {
++    return Expression;
++  }
++
++  ArrayRef<const char *> getGCCRegNames() const override {
++	static const char *const GCCRegNames[] = {
++    	"r0",  "r1",  "r2",  "r3",  "r4",  "r5",  "r6",  "r7",  "r8",  "r9",
++    	"r10", "r11", "r12", "r13", "r14", "r15", "r16", "r17", "r18", "r19",
++    	"r20", "r21", "r22", "r23", "r24", "r25", "r26",   "r27",   "r28",   "bp", "sp", "pc"};
++    return llvm::ArrayRef(GCCRegNames);
++  };
++
++  ArrayRef<TargetInfo::GCCRegAlias> getGCCRegAliases() const override { return std::nullopt; }
++
++  // TODO
++  bool validateAsmConstraint(const char *&Name,
++                             TargetInfo::ConstraintInfo &Info) const override { return false; }
++
++  bool isValidCPUName(StringRef Name) const override {
++  	return Name == "generic";
++  };
++
++  void fillValidCPUList(SmallVectorImpl<StringRef> &Values) const override {
++  	Values.push_back("generic");
++  };
++};
++} // namespace targets
++} // namespace clang
++
++#endif // LLVM_CLANG_LIB_BASIC_TARGETS_LEG_H
+diff --git a/clang/lib/CodeGen/TargetInfo.cpp b/clang/lib/CodeGen/TargetInfo.cpp
+index 9e2d7a85d..c54b9bb07 100644
+--- a/clang/lib/CodeGen/TargetInfo.cpp
++++ b/clang/lib/CodeGen/TargetInfo.cpp
+@@ -11449,6 +11449,20 @@ public:
+ };
+ } // namespace
+ 
++//===----------------------------------------------------------------------===//
++// LEG ABI Implementation
++//===----------------------------------------------------------------------===//
++
++namespace {
++
++class LEGTargetCodeGenInfo : public TargetCodeGenInfo {
++public:
++  LEGTargetCodeGenInfo(CodeGenTypes &CGT)
++      : TargetCodeGenInfo(std::make_unique<DefaultABIInfo>(CGT)) {}
++};
++
++} // namespace
++
+ //===----------------------------------------------------------------------===//
+ // VE ABI Implementation.
+ //
+@@ -12333,6 +12347,9 @@ const TargetCodeGenInfo &CodeGenModule::getTargetCodeGenInfo() {
+     return SetCGInfo(new RISCVTargetCodeGenInfo(Types, XLen, ABIFLen));
+   }
+ 
++  case llvm::Triple::leg:
++    return SetCGInfo(new LEGTargetCodeGenInfo(Types));
++
+   case llvm::Triple::systemz: {
+     bool SoftFloat = CodeGenOpts.FloatABI == "soft";
+     bool HasVector = !SoftFloat && getTarget().getABI() == "vector";
+diff --git a/clang/lib/Driver/Driver.cpp b/clang/lib/Driver/Driver.cpp
+index a268f2fa8..360a42e65 100644
+--- a/clang/lib/Driver/Driver.cpp
++++ b/clang/lib/Driver/Driver.cpp
+@@ -6140,6 +6140,9 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
+         else
+           TC = std::make_unique<toolchains::BareMetal>(*this, Target, Args);
+         break;
++      case llvm::Triple::leg:
++        TC = std::make_unique<toolchains::BareMetal>(*this, Target, Args);
++        break;
+       case llvm::Triple::ve:
+         TC = std::make_unique<toolchains::VEToolChain>(*this, Target, Args);
+         break;
+diff --git a/clang/lib/Driver/ToolChains/CommonArgs.cpp b/clang/lib/Driver/ToolChains/CommonArgs.cpp
+index 34640b3c4..928f0879f 100644
+--- a/clang/lib/Driver/ToolChains/CommonArgs.cpp
++++ b/clang/lib/Driver/ToolChains/CommonArgs.cpp
+@@ -423,6 +423,9 @@ std::string tools::getCPUName(const Driver &D, const ArgList &Args,
+   case llvm::Triple::riscv64:
+     return riscv::getRISCVTargetCPU(Args, T);
+ 
++  case llvm::Triple::leg:
++    return "generic";
++
+   case llvm::Triple::bpfel:
+   case llvm::Triple::bpfeb:
+     if (const Arg *A = Args.getLastArg(options::OPT_mcpu_EQ))
+diff --git a/clang/lib/Driver/ToolChains/Gnu.cpp b/clang/lib/Driver/ToolChains/Gnu.cpp
+index 4f2340316..0c738e345 100644
+--- a/clang/lib/Driver/ToolChains/Gnu.cpp
++++ b/clang/lib/Driver/ToolChains/Gnu.cpp
+@@ -2326,6 +2326,9 @@ void Generic_GCC::GCCInstallationDetector::AddDefaultGCCPrefixes(
+                                                "riscv64-linux-gnu",
+                                                "riscv64-unknown-elf"};
+ 
++  static const char *const LEGLibDirs[] = {"/lib"};
++  static const char *const LEGTriples[] = {"leg"};
++
+   static const char *const SPARCv8LibDirs[] = {"/lib32", "/lib"};
+   static const char *const SPARCv8Triples[] = {"sparc-linux-gnu",
+                                                "sparcv8-linux-gnu"};
+@@ -2593,6 +2596,10 @@ void Generic_GCC::GCCInstallationDetector::AddDefaultGCCPrefixes(
+     BiarchLibDirs.append(begin(RISCV32LibDirs), end(RISCV32LibDirs));
+     BiarchTripleAliases.append(begin(RISCV32Triples), end(RISCV32Triples));
+     break;
++  case llvm::Triple::leg:
++    LibDirs.append(begin(LEGLibDirs), end(LEGLibDirs));
++    TripleAliases.append(begin(LEGTriples), end(LEGTriples));
++    break;
+   case llvm::Triple::sparc:
+   case llvm::Triple::sparcel:
+     LibDirs.append(begin(SPARCv8LibDirs), end(SPARCv8LibDirs));
+@@ -2917,6 +2924,7 @@ bool Generic_GCC::IsIntegratedAssemblerDefault() const {
+   case llvm::Triple::r600:
+   case llvm::Triple::riscv32:
+   case llvm::Triple::riscv64:
++  case llvm::Triple::leg:
+   case llvm::Triple::sparc:
+   case llvm::Triple::sparcel:
+   case llvm::Triple::sparcv9:
+diff --git a/llvm/include/llvm/BinaryFormat/ELF.h b/llvm/include/llvm/BinaryFormat/ELF.h
+index 75f0c960b..4848ae0d9 100644
+--- a/llvm/include/llvm/BinaryFormat/ELF.h
++++ b/llvm/include/llvm/BinaryFormat/ELF.h
+@@ -320,6 +320,7 @@ enum {
+   EM_VE = 251,            // NEC SX-Aurora VE
+   EM_CSKY = 252,          // C-SKY 32-bit processor
+   EM_LOONGARCH = 258,     // LoongArch
++  EM_LEG = 512,           // Ieads LEG architecture
+ };
+ 
+ // Object file classes.
+@@ -945,6 +946,10 @@ enum {
+ #include "ELFRelocs/Xtensa.def"
+ };
+ 
++enum {
++#include "ELFRelocs/LEG.def"
++};
++
+ #undef ELF_RELOC
+ 
+ // Section header.
+diff --git a/llvm/include/llvm/BinaryFormat/ELFRelocs/LEG.def b/llvm/include/llvm/BinaryFormat/ELFRelocs/LEG.def
+new file mode 100644
+index 000000000..23f71e57e
+--- /dev/null
++++ b/llvm/include/llvm/BinaryFormat/ELFRelocs/LEG.def
+@@ -0,0 +1,8 @@
++#ifndef ELF_RELOC
++#error "ELF_RELOC must be defined"
++#endif
++
++ELF_RELOC(R_LEG_NONE, 0)
++ELF_RELOC(R_LEG_IMM64, 1)
++ELF_RELOC(R_LEG_PCREL_BR22, 2)
++ELF_RELOC(R_LEG_PCREL_BR27, 3)
+\ No newline at end of file
+diff --git a/llvm/include/llvm/Object/ELFObjectFile.h b/llvm/include/llvm/Object/ELFObjectFile.h
+index 8baf6f4c5..72d72e5cf 100644
+--- a/llvm/include/llvm/Object/ELFObjectFile.h
++++ b/llvm/include/llvm/Object/ELFObjectFile.h
+@@ -1247,6 +1247,8 @@ StringRef ELFObjectFile<ELFT>::getFileFormatName() const {
+       return "elf64-ve";
+     case ELF::EM_LOONGARCH:
+       return "elf64-loongarch";
++    case ELF::EM_LEG:
++      return "elf64-leg";
+     default:
+       return "elf64-unknown";
+     }
+@@ -1276,6 +1278,8 @@ template <class ELFT> Triple::ArchType ELFObjectFile<ELFT>::getArch() const {
+     return Triple::hexagon;
+   case ELF::EM_LANAI:
+     return Triple::lanai;
++  case ELF::EM_LEG:
++    return Triple::leg;
+   case ELF::EM_MIPS:
+     switch (EF.getHeader().e_ident[ELF::EI_CLASS]) {
+     case ELF::ELFCLASS32:
+diff --git a/llvm/include/llvm/TargetParser/Triple.h b/llvm/include/llvm/TargetParser/Triple.h
+index 59513fa2f..c077d8e8c 100644
+--- a/llvm/include/llvm/TargetParser/Triple.h
++++ b/llvm/include/llvm/TargetParser/Triple.h
+@@ -90,6 +90,7 @@ public:
+     nvptx64,        // NVPTX: 64-bit
+     le32,           // le32: generic little-endian 32-bit CPU (PNaCl)
+     le64,           // le64: generic little-endian 64-bit CPU (PNaCl)
++    leg,            // Iead's LEG architecture
+     amdil,          // AMDIL
+     amdil64,        // AMDIL with 64-bit pointers
+     hsail,          // AMD HSAIL
+diff --git a/llvm/lib/BinaryFormat/ELF.cpp b/llvm/lib/BinaryFormat/ELF.cpp
+index dc8f3051a..729cac435 100644
+--- a/llvm/lib/BinaryFormat/ELF.cpp
++++ b/llvm/lib/BinaryFormat/ELF.cpp
+@@ -198,6 +198,7 @@ uint16_t ELF::convertArchNameToEMachine(StringRef Arch) {
+       .Case("ve", EM_VE)
+       .Case("csky", EM_CSKY)
+       .Case("loongarch", EM_LOONGARCH)
++      .Case("leg", EM_LEG)
+       .Default(EM_NONE);
+ }
+ 
+@@ -564,6 +565,8 @@ StringRef ELF::convertEMachineToArchName(uint16_t EMachine) {
+     return "csky";
+   case EM_LOONGARCH:
+     return "loongarch";
++  case EM_LEG:
++    return "leg";
+   default:
+     return "None";
+   }
+diff --git a/llvm/lib/Object/ELF.cpp b/llvm/lib/Object/ELF.cpp
+index 81c9a0971..15583f559 100644
+--- a/llvm/lib/Object/ELF.cpp
++++ b/llvm/lib/Object/ELF.cpp
+@@ -180,6 +180,13 @@ StringRef llvm::object::getELFRelocationTypeName(uint32_t Machine,
+       break;
+     }
+     break;
++  case ELF::EM_LEG:
++    switch (Type) {
++#include "llvm/BinaryFormat/ELFRelocs/LEG.def"
++    default:
++      break;
++    }
++    break;
+   default:
+     break;
+   }
+diff --git a/llvm/lib/TargetParser/Triple.cpp b/llvm/lib/TargetParser/Triple.cpp
+index a68035989..7431afe5b 100644
+--- a/llvm/lib/TargetParser/Triple.cpp
++++ b/llvm/lib/TargetParser/Triple.cpp
+@@ -45,6 +45,7 @@ StringRef Triple::getArchTypeName(ArchType Kind) {
+   case lanai:          return "lanai";
+   case le32:           return "le32";
+   case le64:           return "le64";
++  case leg:            return "leg";
+   case loongarch32:    return "loongarch32";
+   case loongarch64:    return "loongarch64";
+   case m68k:           return "m68k";
+@@ -145,6 +146,8 @@ StringRef Triple::getArchTypePrefix(ArchType Kind) {
+   case le32:        return "le32";
+   case le64:        return "le64";
+ 
++  case leg:         return "leg";
++
+   case amdil:
+   case amdil64:     return "amdil";
+ 
+@@ -357,6 +360,7 @@ Triple::ArchType Triple::getArchTypeForLLVMName(StringRef Name) {
+     .Case("nvptx64", nvptx64)
+     .Case("le32", le32)
+     .Case("le64", le64)
++    .Case("leg", leg)
+     .Case("amdil", amdil)
+     .Case("amdil64", amdil64)
+     .Case("hsail", hsail)
+@@ -497,6 +501,7 @@ static Triple::ArchType parseArch(StringRef ArchName) {
+     .Case("nvptx64", Triple::nvptx64)
+     .Case("le32", Triple::le32)
+     .Case("le64", Triple::le64)
++    .Case("leg", Triple::leg)
+     .Case("amdil", Triple::amdil)
+     .Case("amdil64", Triple::amdil64)
+     .Case("hsail", Triple::hsail)
+@@ -826,6 +831,7 @@ static Triple::ObjectFormatType getDefaultFormat(const Triple &T) {
+   case Triple::lanai:
+   case Triple::le32:
+   case Triple::le64:
++  case Triple::leg:
+   case Triple::loongarch32:
+   case Triple::loongarch64:
+   case Triple::m68k:
+@@ -1446,6 +1452,7 @@ static unsigned getArchPointerBitWidth(llvm::Triple::ArchType Arch) {
+   case llvm::Triple::bpfel:
+   case llvm::Triple::hsail64:
+   case llvm::Triple::le64:
++  case llvm::Triple::leg:
+   case llvm::Triple::loongarch64:
+   case llvm::Triple::mips64:
+   case llvm::Triple::mips64el:
+@@ -1487,6 +1494,7 @@ Triple Triple::get32BitArchVariant() const {
+   case Triple::bpfeb:
+   case Triple::bpfel:
+   case Triple::msp430:
++  case Triple::leg:
+   case Triple::systemz:
+   case Triple::ve:
+     T.setArch(UnknownArch);
+@@ -1589,6 +1597,7 @@ Triple Triple::get64BitArchVariant() const {
+   case Triple::bpfel:
+   case Triple::hsail64:
+   case Triple::le64:
++  case Triple::leg:
+   case Triple::loongarch64:
+   case Triple::mips64:
+   case Triple::mips64el:
+@@ -1656,6 +1665,7 @@ Triple Triple::getBigEndianArchVariant() const {
+   case Triple::kalimba:
+   case Triple::le32:
+   case Triple::le64:
++  case Triple::leg:
+   case Triple::loongarch32:
+   case Triple::loongarch64:
+   case Triple::msp430:
+@@ -1760,6 +1770,7 @@ bool Triple::isLittleEndian() const {
+   case Triple::kalimba:
+   case Triple::le32:
+   case Triple::le64:
++  case Triple::leg:
+   case Triple::loongarch32:
+   case Triple::loongarch64:
+   case Triple::mips64el:
+-- 
+2.47.0
+
