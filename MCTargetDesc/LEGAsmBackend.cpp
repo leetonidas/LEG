@@ -14,6 +14,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/ADT/StringSwitch.h"
 
 using namespace llvm;
 
@@ -92,7 +93,7 @@ void LEGAsmBackend::applyFixup(const MCAssembler &Asm, const MCFixup &Fixup, con
 	}
 }
 
-bool LEGAsmBackend::shouldForceRelocation(const MCAssembler &Asm, const MCFixup &Fixup, const MCValue &Target) {
+bool LEGAsmBackend::shouldForceRelocation(const MCAssembler &Asm, const MCFixup &Fixup, const MCValue &Target, const MCSubtargetInfo *STI) {
 	return false;
 }
 

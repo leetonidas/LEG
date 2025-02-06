@@ -15,9 +15,9 @@ class MCOperand;
 FunctionPass *createLEGExpandPseudoPass();
 void initializeLEGExpandPseudoPass(PassRegistry &);
 
-FunctionPass *createLEGISelDag(LEGTargetMachine &TM, CodeGenOpt::Level OptLevel);
+FunctionPass *createLEGISelDag(LEGTargetMachine &TM, CodeGenOptLevel OptLevel);
 
-void initializeLEGDAGToDAGISelPass(PassRegistry &);
+void initializeLEGDAGToDAGISelLegacyPass(PassRegistry &);
 
 void lowerLEGMachineInstrToMCInst(const MachineInstr &MI, MCInst &OutMI, const AsmPrinter &AP);
 

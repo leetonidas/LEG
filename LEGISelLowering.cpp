@@ -75,7 +75,7 @@ SDValue LEGTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI, Smal
 
 	CCInfo.AnalyzeCallOperands(Outs, CC_LEG);
 
-	unsigned NumBytes = CCInfo.getNextStackOffset();
+	unsigned NumBytes = CCInfo.getStackSize();
 
 	Chain = DAG.getCALLSEQ_START(Chain, NumBytes, 0, DL);
 	SmallVector<std::pair<unsigned, SDValue>, 8> RegsToPass;

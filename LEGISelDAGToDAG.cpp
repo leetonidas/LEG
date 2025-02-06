@@ -5,6 +5,9 @@
 
 
 #include "llvm/CodeGen/SelectionDAGISel.h"
+#include "llvm/Support/CodeGen.h"
+#include <memory>
+#include <type_traits>
 
 #define DEBUG_TYPE "leg-isel"
 #define PASS_NAME "LEG DAG->DAG Pattern Instruction Selection"
@@ -15,12 +18,10 @@ namespace {
 class LEGDAGToDAGISel : public SelectionDAGISel {
 
 public:
-	static char ID;
-
 	LEGDAGToDAGISel() = delete;
 
-	explicit LEGDAGToDAGISel(LEGTargetMachine &TargetMachine, CodeGenOpt::Level OptLevel)
-		: SelectionDAGISel(ID, TargetMachine, OptLevel)
+	explicit LEGDAGToDAGISel(LEGTargetMachine &TargetMachine, CodeGenOptLevel OptLevel)
+		: SelectionDAGISel(TargetMachine, OptLevel)
 		, Subtarget(nullptr) {}
 
 	bool runOnMachineFunction(MachineFunction &MF) override;
@@ -38,10 +39,6 @@ private:
 };
 
 } // namepsace
-
-char LEGDAGToDAGISel::ID = 0;
-
-INITIALIZE_PASS(LEGDAGToDAGISel, DEBUG_TYPE, PASS_NAME, false, false)
 
 bool LEGDAGToDAGISel::runOnMachineFunction(MachineFunction &MF) {
 	Subtarget = &MF.getSubtarget<LEGSubtarget>();
@@ -88,6 +85,19 @@ void LEGDAGToDAGISel::Select(SDNode *N) {
 	SelectCode(N);
 }
 
-FunctionPass *llvm::createLEGISelDag(LEGTargetMachine &TM, CodeGenOpt::Level OptLevel) {
-	return new LEGDAGToDAGISel(TM, OptLevel);
+class LEGDAGToDAGISelLegacy : public SelectionDAGISelLegacy {
+public:
+	static char ID;
+	explicit LEGDAGToDAGISelLegacy(LEGTargetMachine &TargetMachine, CodeGenOptLevel OptLevel);
+};
+
+FunctionPass *llvm::createLEGISelDag(LEGTargetMachine &TM, CodeGenOptLevel OptLevel) {
+	return new LEGDAGToDAGISelLegacy(TM, OptLevel);
 }
+
+char LEGDAGToDAGISelLegacy::ID = 0;
+
+LEGDAGToDAGISelLegacy::LEGDAGToDAGISelLegacy(LEGTargetMachine &TM, CodeGenOptLevel OptLevel)
+	: SelectionDAGISelLegacy(ID, std::make_unique<LEGDAGToDAGISel>(TM, OptLevel)) {}
+
+INITIALIZE_PASS(LEGDAGToDAGISelLegacy, DEBUG_TYPE, PASS_NAME, false, false)

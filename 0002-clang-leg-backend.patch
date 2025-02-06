@@ -1,0 +1,332 @@
+From bf4ba3e331972ead4eb6cd6ad518df4f1f69b7d6 Mon Sep 17 00:00:00 2001
+From: Clemens Jonischkeit <iead@leaddev.de>
+Date: Thu, 6 Feb 2025 16:31:24 +0100
+Subject: [PATCH 2/2] clang leg backend
+
+---
+ clang/include/clang/Basic/Attr.td          |  1 +
+ clang/lib/Basic/CMakeLists.txt             |  1 +
+ clang/lib/Basic/Targets.cpp                |  4 ++
+ clang/lib/Basic/Targets/LEG.cpp            | 17 +++++
+ clang/lib/Basic/Targets/LEG.h              | 77 ++++++++++++++++++++++
+ clang/lib/CodeGen/CMakeLists.txt           |  1 +
+ clang/lib/CodeGen/CodeGenModule.cpp        |  4 ++
+ clang/lib/CodeGen/TargetInfo.h             |  4 ++
+ clang/lib/CodeGen/Targets/LEG.cpp          | 26 ++++++++
+ clang/lib/Driver/Driver.cpp                |  3 +
+ clang/lib/Driver/ToolChains/CommonArgs.cpp |  4 ++
+ clang/lib/Driver/ToolChains/Gnu.cpp        |  9 +++
+ 12 files changed, 151 insertions(+)
+ create mode 100644 clang/lib/Basic/Targets/LEG.cpp
+ create mode 100644 clang/lib/Basic/Targets/LEG.h
+ create mode 100644 clang/lib/CodeGen/Targets/LEG.cpp
+
+diff --git a/clang/include/clang/Basic/Attr.td b/clang/include/clang/Basic/Attr.td
+index 46d0a66d5..e3ed60399 100644
+--- a/clang/include/clang/Basic/Attr.td
++++ b/clang/include/clang/Basic/Attr.td
+@@ -455,6 +455,7 @@ def TargetAnyMips : TargetArch<["mips", "mipsel", "mips64", "mips64el"]>;
+ def TargetMSP430 : TargetArch<["msp430"]>;
+ def TargetM68k : TargetArch<["m68k"]>;
+ def TargetRISCV : TargetArch<["riscv32", "riscv64"]>;
++def TargetLEG : TargetArch<["leg"]>;
+ def TargetX86 : TargetArch<["x86"]>;
+ def TargetAnyX86 : TargetArch<["x86", "x86_64"]>;
+ def TargetWebAssembly : TargetArch<["wasm32", "wasm64"]>;
+diff --git a/clang/lib/Basic/CMakeLists.txt b/clang/lib/Basic/CMakeLists.txt
+index f30680552..4bfbde647 100644
+--- a/clang/lib/Basic/CMakeLists.txt
++++ b/clang/lib/Basic/CMakeLists.txt
+@@ -112,6 +112,7 @@ add_clang_library(clangBasic
+   Targets/PNaCl.cpp
+   Targets/PPC.cpp
+   Targets/RISCV.cpp
++  Targets/LEG.cpp
+   Targets/SPIR.cpp
+   Targets/Sparc.cpp
+   Targets/SystemZ.cpp
+diff --git a/clang/lib/Basic/Targets.cpp b/clang/lib/Basic/Targets.cpp
+index 29133f9ee..a887aa50a 100644
+--- a/clang/lib/Basic/Targets.cpp
++++ b/clang/lib/Basic/Targets.cpp
+@@ -33,6 +33,7 @@
+ #include "Targets/PNaCl.h"
+ #include "Targets/PPC.h"
+ #include "Targets/RISCV.h"
++#include "Targets/LEG.h"
+ #include "Targets/SPIR.h"
+ #include "Targets/Sparc.h"
+ #include "Targets/SystemZ.h"
+@@ -467,6 +468,9 @@ std::unique_ptr<TargetInfo> AllocateTarget(const llvm::Triple &Triple,
+       return std::make_unique<RISCV64TargetInfo>(Triple, Opts);
+     }
+ 
++  case llvm::Triple::leg:
++    return std::make_unique<LEGTargetInfo>(Triple, Opts);
++
+   case llvm::Triple::sparc:
+     switch (os) {
+     case llvm::Triple::Linux:
+diff --git a/clang/lib/Basic/Targets/LEG.cpp b/clang/lib/Basic/Targets/LEG.cpp
+new file mode 100644
+index 000000000..0c8293f3d
+--- /dev/null
++++ b/clang/lib/Basic/Targets/LEG.cpp
+@@ -0,0 +1,17 @@
++#include "LEG.h"
++#include "clang/Basic/MacroBuilder.h"
++#include "llvm/ADT/StringSwitch.h"
++
++using namespace clang;
++using namespace clang::targets;
++
++namespace clang {
++namespace targets {
++void LEGTargetInfo::getTargetDefines(const LangOptions &Opts, MacroBuilder &Builder) const {
++	Builder.defineMacro("LEG");
++	Builder.defineMacro("__LEG");
++	Builder.defineMacro("__LEG__");
++	Builder.defineMacro("__ELF__");
++}
++}
++}
+\ No newline at end of file
+diff --git a/clang/lib/Basic/Targets/LEG.h b/clang/lib/Basic/Targets/LEG.h
+new file mode 100644
+index 000000000..04d1f3c70
+--- /dev/null
++++ b/clang/lib/Basic/Targets/LEG.h
+@@ -0,0 +1,77 @@
++#ifndef LLVM_CLANG_LIB_BASIC_TARGETS_LEG_H
++#define LLVM_CLANG_LIB_BASIC_TARGETS_LEG_H
++
++#include "clang/Basic/TargetInfo.h"
++#include "clang/Basic/TargetOptions.h"
++#include "llvm/TargetParser/Triple.h"
++#include "llvm/Support/Compiler.h"
++#include <string_view>
++
++namespace clang {
++namespace targets {
++
++// LEG Target
++class LEGTargetInfo : public TargetInfo {
++protected:
++  std::string ABI, CPU;
++
++public:
++  LEGTargetInfo(const llvm::Triple &Triple, const TargetOptions &)
++      : TargetInfo(Triple) {
++    TLSSupported = false;
++    HasLongDouble = false;
++    PointerWidth = PointerAlign = 64;
++    // keep in sync with the definition in the llvm backend
++    resetDataLayout("e-m:e-p:64:64-i64:64-i128:128-n64-S128");
++  }
++
++  bool setCPU(const std::string &Name) override {
++    if (!isValidCPUName(Name))
++      return false;
++    CPU = Name;
++    return true;
++  }
++
++  StringRef getABI() const override { return ABI; }
++  void getTargetDefines(const LangOptions &Opts,
++                        MacroBuilder &Builder) const override;
++
++  ArrayRef<Builtin::Info> getTargetBuiltins() const override { return std::nullopt; }
++
++  BuiltinVaListKind getBuiltinVaListKind() const override {
++    return TargetInfo::VoidPtrBuiltinVaList;
++  }
++
++  std::string_view getClobbers() const override { return ""; }
++
++  StringRef getConstraintRegister(StringRef Constraint,
++                                  StringRef Expression) const override {
++    return Expression;
++  }
++
++  ArrayRef<const char *> getGCCRegNames() const override {
++	static const char *const GCCRegNames[] = {
++    	"r0",  "r1",  "r2",  "r3",  "r4",  "r5",  "r6",  "r7",  "r8",  "r9",
++    	"r10", "r11", "r12", "r13", "r14", "r15", "r16", "r17", "r18", "r19",
++    	"r20", "r21", "r22", "r23", "r24", "r25", "r26",   "r27",   "r28",   "bp", "sp", "pc"};
++    return llvm::ArrayRef(GCCRegNames);
++  };
++
++  ArrayRef<TargetInfo::GCCRegAlias> getGCCRegAliases() const override { return std::nullopt; }
++
++  // TODO
++  bool validateAsmConstraint(const char *&Name,
++                             TargetInfo::ConstraintInfo &Info) const override { return false; }
++
++  bool isValidCPUName(StringRef Name) const override {
++  	return Name == "generic";
++  };
++
++  void fillValidCPUList(SmallVectorImpl<StringRef> &Values) const override {
++  	Values.push_back("generic");
++  };
++};
++} // namespace targets
++} // namespace clang
++
++#endif // LLVM_CLANG_LIB_BASIC_TARGETS_LEG_H
+\ No newline at end of file
+diff --git a/clang/lib/CodeGen/CMakeLists.txt b/clang/lib/CodeGen/CMakeLists.txt
+index 2a179dedd..2c2329acc 100644
+--- a/clang/lib/CodeGen/CMakeLists.txt
++++ b/clang/lib/CodeGen/CMakeLists.txt
+@@ -132,6 +132,7 @@ add_clang_library(clangCodeGen
+   Targets/PNaCl.cpp
+   Targets/PPC.cpp
+   Targets/RISCV.cpp
++  Targets/LEG.cpp
+   Targets/SPIR.cpp
+   Targets/Sparc.cpp
+   Targets/SystemZ.cpp
+diff --git a/clang/lib/CodeGen/CodeGenModule.cpp b/clang/lib/CodeGen/CodeGenModule.cpp
+index 2a5d5f908..d09eaaa27 100644
+--- a/clang/lib/CodeGen/CodeGenModule.cpp
++++ b/clang/lib/CodeGen/CodeGenModule.cpp
+@@ -238,6 +238,10 @@ createTargetCodeGenInfo(CodeGenModule &CGM) {
+     return createRISCVTargetCodeGenInfo(CGM, XLen, ABIFLen, EABI);
+   }
+ 
++  case llvm::Triple::leg: {
++    return createLEGTargetCodeGenInfo(CGM);
++  }
++
+   case llvm::Triple::systemz: {
+     bool SoftFloat = CodeGenOpts.FloatABI == "soft";
+     bool HasVector = !SoftFloat && Target.getABI() == "vector";
+diff --git a/clang/lib/CodeGen/TargetInfo.h b/clang/lib/CodeGen/TargetInfo.h
+index 156b4ff43..d3368e1ae 100644
+--- a/clang/lib/CodeGen/TargetInfo.h
++++ b/clang/lib/CodeGen/TargetInfo.h
+@@ -23,6 +23,7 @@
+ #include "clang/Basic/TargetInfo.h"
+ #include "llvm/ADT/SmallString.h"
+ #include "llvm/ADT/StringRef.h"
++#include <memory>
+ 
+ namespace llvm {
+ class Constant;
+@@ -524,6 +525,9 @@ std::unique_ptr<TargetCodeGenInfo>
+ createRISCVTargetCodeGenInfo(CodeGenModule &CGM, unsigned XLen, unsigned FLen,
+                              bool EABI);
+ 
++std::unique_ptr<TargetCodeGenInfo>
++createLEGTargetCodeGenInfo(CodeGenModule &CGM);
++
+ std::unique_ptr<TargetCodeGenInfo>
+ createCommonSPIRTargetCodeGenInfo(CodeGenModule &CGM);
+ 
+diff --git a/clang/lib/CodeGen/Targets/LEG.cpp b/clang/lib/CodeGen/Targets/LEG.cpp
+new file mode 100644
+index 000000000..7930a4ebe
+--- /dev/null
++++ b/clang/lib/CodeGen/Targets/LEG.cpp
+@@ -0,0 +1,26 @@
++#include "ABIInfoImpl.h"
++#include "CodeGenModule.h"
++#include "TargetInfo.h"
++#include <memory>
++
++using namespace clang;
++using namespace clang::CodeGen;
++
++//===----------------------------------------------------------------------===//
++// LEG ABI Implementation
++//===----------------------------------------------------------------------===//
++
++namespace {
++
++class LEGTargetCodeGenInfo : public TargetCodeGenInfo {
++public:
++  LEGTargetCodeGenInfo(CodeGenTypes &CGT)
++      : TargetCodeGenInfo(std::make_unique<DefaultABIInfo>(CGT)) {}
++};
++
++} // namespace
++
++std::unique_ptr<TargetCodeGenInfo>
++CodeGen::createLEGTargetCodeGenInfo(CodeGenModule &CGM) {
++	return std::make_unique<LEGTargetCodeGenInfo>(CGM.getTypes());
++}
+\ No newline at end of file
+diff --git a/clang/lib/Driver/Driver.cpp b/clang/lib/Driver/Driver.cpp
+index f9dc8ab24..76d4d93b2 100644
+--- a/clang/lib/Driver/Driver.cpp
++++ b/clang/lib/Driver/Driver.cpp
+@@ -6505,6 +6505,9 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
+         else
+           TC = std::make_unique<toolchains::BareMetal>(*this, Target, Args);
+         break;
++      case llvm::Triple::leg:
++        TC = std::make_unique<toolchains::BareMetal>(*this, Target, Args);
++        break;
+       case llvm::Triple::ve:
+         TC = std::make_unique<toolchains::VEToolChain>(*this, Target, Args);
+         break;
+diff --git a/clang/lib/Driver/ToolChains/CommonArgs.cpp b/clang/lib/Driver/ToolChains/CommonArgs.cpp
+index 019df16a9..92da18584 100644
+--- a/clang/lib/Driver/ToolChains/CommonArgs.cpp
++++ b/clang/lib/Driver/ToolChains/CommonArgs.cpp
+@@ -65,6 +65,7 @@
+ #include "llvm/Support/YAMLParser.h"
+ #include "llvm/TargetParser/Host.h"
+ #include "llvm/TargetParser/TargetParser.h"
++#include "llvm/TargetParser/Triple.h"
+ #include <optional>
+ 
+ using namespace clang::driver;
+@@ -631,6 +632,9 @@ std::string tools::getCPUName(const Driver &D, const ArgList &Args,
+   case llvm::Triple::riscv64:
+     return riscv::getRISCVTargetCPU(Args, T);
+ 
++  case llvm::Triple::leg:
++    return "generic";
++
+   case llvm::Triple::bpfel:
+   case llvm::Triple::bpfeb:
+     if (const Arg *A = Args.getLastArg(options::OPT_mcpu_EQ))
+diff --git a/clang/lib/Driver/ToolChains/Gnu.cpp b/clang/lib/Driver/ToolChains/Gnu.cpp
+index 5e9a655ea..39d59e772 100644
+--- a/clang/lib/Driver/ToolChains/Gnu.cpp
++++ b/clang/lib/Driver/ToolChains/Gnu.cpp
+@@ -33,6 +33,7 @@
+ #include "llvm/Support/VirtualFileSystem.h"
+ #include "llvm/TargetParser/RISCVISAInfo.h"
+ #include "llvm/TargetParser/TargetParser.h"
++#include "llvm/TargetParser/Triple.h"
+ #include <system_error>
+ 
+ using namespace clang::driver;
+@@ -2560,6 +2561,10 @@ void Generic_GCC::GCCInstallationDetector::AddDefaultGCCPrefixes(
+   static const char *const RISCV32LibDirs[] = {"/lib32", "/lib"};
+   static const char *const RISCV32Triples[] = {"riscv32-unknown-linux-gnu",
+                                                "riscv32-unknown-elf"};
++
++  static const char *const LEGLibDirs[] = {"/lib"};
++  static const char *const LEGTriples[] = {"leg"};
++
+   static const char *const RISCV64LibDirs[] = {"/lib64", "/lib"};
+   static const char *const RISCV64Triples[] = {"riscv64-unknown-linux-gnu",
+                                                "riscv64-unknown-elf"};
+@@ -2832,6 +2837,10 @@ void Generic_GCC::GCCInstallationDetector::AddDefaultGCCPrefixes(
+     BiarchLibDirs.append(begin(RISCV32LibDirs), end(RISCV32LibDirs));
+     BiarchTripleAliases.append(begin(RISCV32Triples), end(RISCV32Triples));
+     break;
++  case llvm::Triple::leg:
++    LibDirs.append(begin(LEGLibDirs), end(LEGLibDirs));
++    TripleAliases.append(begin(LEGTriples), end(LEGTriples));
++    break;
+   case llvm::Triple::sparc:
+   case llvm::Triple::sparcel:
+     LibDirs.append(begin(SPARCv8LibDirs), end(SPARCv8LibDirs));
+-- 
+2.48.1
+

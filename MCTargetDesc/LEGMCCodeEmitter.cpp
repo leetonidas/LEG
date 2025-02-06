@@ -2,7 +2,9 @@
 #include "MCTargetDesc/LEGMCTargetDesc.h"
 #include "MCTargetDesc/LEGFixupKinds.h"
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/bit.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCContext.h"
@@ -31,15 +33,15 @@ public:
 		: Ctx(ctx), MCII(MCII) {}
 	~LEGMCCodeEmitter() override = default;
 
-	//void emitInstruction(uint64_t val, unsigned size, const MCSubtargetInfo &STI, raw_ostream &OS) const;
+	//void emitInstruction(uint64_t val, unsigned size, const MCSubtargetInfo &STI, SmallVectorImpl<char> &CB) const;
 
 	// useb by addrbo
 	uint64_t getAddrModeRegImm(const MCInst &MI, unsigned OpNo, SmallVectorImpl<MCFixup> &Fixups, const MCSubtargetInfo &STI) const;
 	uint64_t getImmOpValSr2(const MCInst &MI, unsigned OpNo, SmallVectorImpl<MCFixup> &Fixups, const MCSubtargetInfo &STI) const;
-	void emitImmediate(const MCInst &MI, const MCOperand &ImmOp, raw_ostream &OS, SmallVectorImpl<MCFixup> &Fixups, const MCSubtargetInfo &STI) const;
-	void emitJmpEnc(const MCInst &MI, raw_ostream &OS, SmallVectorImpl<MCFixup> &Fixups, const MCSubtargetInfo &STI) const;
+	void emitImmediate(const MCInst &MI, const MCOperand &ImmOp, SmallVectorImpl<char> &CB, SmallVectorImpl<MCFixup> &Fixups, const MCSubtargetInfo &STI) const;
+	void emitJmpEnc(const MCInst &MI, SmallVectorImpl<char> &CB, SmallVectorImpl<MCFixup> &Fixups, const MCSubtargetInfo &STI) const;
 
-	void encodeInstruction(const MCInst &MI, raw_ostream &OS, SmallVectorImpl<MCFixup> &Fixups, const MCSubtargetInfo &STI) const override;
+	void encodeInstruction(const MCInst &MI, SmallVectorImpl<char> &CB, SmallVectorImpl<MCFixup> &Fixups, const MCSubtargetInfo &STI) const override;
 
 	unsigned getMachineOpValue(const MCInst &MI, const MCOperand &MO, SmallVectorImpl<MCFixup> &Fixups, const MCSubtargetInfo &STI) const;
 	// tbgen generated
@@ -66,7 +68,7 @@ unsigned LEGMCCodeEmitter::getMachineOpValue(const MCInst &MI,
 	return 0;
 }
 /*
-void LEGMCCodeEmitter::emitInstruction(uint64_t val, unsigned int size, const MCSubtargetInfo &STI, raw_ostream &OS) const {
+void LEGMCCodeEmitter::emitInstruction(uint64_t val, unsigned int size, const MCSubtargetInfo &STI, SmallVectorImpl<char> &CB) const {
 	uint32_t v = val;
 	support::endian::write(OS, v, support::endianness::little);
 }
@@ -110,12 +112,12 @@ uint64_t LEGMCCodeEmitter::getImmOpValSr2(const MCInst &MI, unsigned int OpNo, S
 	return 0;
 }
 
-void LEGMCCodeEmitter::emitImmediate(const MCInst &MI, const MCOperand &ImmOp, raw_ostream &OS, SmallVectorImpl<MCFixup> &Fixups, const MCSubtargetInfo &STI) const {
+void LEGMCCodeEmitter::emitImmediate(const MCInst &MI, const MCOperand &ImmOp, SmallVectorImpl<char> &CB, SmallVectorImpl<MCFixup> &Fixups, const MCSubtargetInfo &STI) const {
 
-	auto endian = STI.getFeatureBits()[LEG::FeatureBIGENDIAN] ? support::big : support::little;
+	auto endian = STI.getFeatureBits()[LEG::FeatureBIGENDIAN] ? endianness::big : endianness::little;
 
 	if (ImmOp.isImm()) {
-		support::endian::write(OS, ImmOp.getImm(), endian);
+		support::endian::write(CB, ImmOp.getImm(), endian);
 		return;
 	}
 
@@ -127,31 +129,31 @@ void LEGMCCodeEmitter::emitImmediate(const MCInst &MI, const MCOperand &ImmOp, r
 	Fixups.push_back(MCFixup::create(0, Expr, MCFixupKind(LEG::fixup_leg_imm64), MI.getLoc()));
 	++MCNumFixups;
 
-	support::endian::write(OS, (uint64_t) 0, endian);
+	support::endian::write(CB, (uint64_t) 0, endian);
 	return;
 }
 
-void LEGMCCodeEmitter::emitJmpEnc(const MCInst &MI, raw_ostream &OS, SmallVectorImpl<MCFixup> &Fixups, const MCSubtargetInfo &STI) const {
+void LEGMCCodeEmitter::emitJmpEnc(const MCInst &MI, SmallVectorImpl<char> &CB, SmallVectorImpl<MCFixup> &Fixups, const MCSubtargetInfo &STI) const {
 	if (!STI.getFeatureBits()[LEG::FeatureInsEncryption])
 		return;
 
-	support::endian::write(OS, (uint32_t) 0, support::little);
+	support::endian::write(CB, (uint32_t) 0, endianness::little);
 	return;
 }
 
-void LEGMCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS, SmallVectorImpl<MCFixup> &Fixups, const MCSubtargetInfo &STI) const {
+void LEGMCCodeEmitter::encodeInstruction(const MCInst &MI, SmallVectorImpl<char> &CB, SmallVectorImpl<MCFixup> &Fixups, const MCSubtargetInfo &STI) const {
 	uint32_t Bits = getBinaryCodeForInstr(MI, Fixups, STI);
-	auto endian = STI.getFeatureBits()[LEG::FeatureBIGENDIAN] ? support::big : support::little;
-	support::endian::write(OS, Bits, endian);
+	auto endian = STI.getFeatureBits()[LEG::FeatureBIGENDIAN] ? endianness::big : endianness::little;
+	support::endian::write(CB, Bits, endian);
 	switch (MI.getOpcode()) {
 	default:
 		break;
 	case LEG::LDI:
-		emitImmediate(MI, MI.getOperand(1), OS, Fixups, STI);
+		emitImmediate(MI, MI.getOperand(1), CB, Fixups, STI);
 		break;
 	case LEG::BR_ENC:
 	case LEG::BRCC_ENC:
-		emitJmpEnc(MI, OS, Fixups, STI);
+		emitJmpEnc(MI, CB, Fixups, STI);
 		break;
 	}
 	//if (MI.getOpcode() == LEG::LDI) {

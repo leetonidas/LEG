@@ -18,7 +18,7 @@ static Reloc::Model getEffectiveRelocModel(const Triple &TT,
 }
 
 LEGTargetMachine::LEGTargetMachine(const Target &T, const Triple &TT, StringRef CPU, StringRef FS, const TargetOptions &Options,
-	                               std::optional<Reloc::Model> RM, std::optional<CodeModel::Model> CM, CodeGenOpt::Level Ol, bool JIT)
+	                               std::optional<Reloc::Model> RM, std::optional<CodeModel::Model> CM, CodeGenOptLevel Ol, bool JIT)
 	: LLVMTargetMachine(T, "e-m:e-p:64:64-i64:64-i128:128-n64-S128", TT, CPU, FS, Options, getEffectiveRelocModel(TT, RM),
 		                getEffectiveCodeModel(CM, CodeModel::Small), Ol)
 	, TLOF(std::make_unique<TargetLoweringObjectFileELF>())

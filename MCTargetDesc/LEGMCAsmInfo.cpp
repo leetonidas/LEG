@@ -1,5 +1,5 @@
 #include "LEGMCAsmInfo.h"
-#include "llvm/ADT/Triple.h"
+#include "llvm/TargetParser/Triple.h"
 #include "llvm/MC/MCStreamer.h"
 
 using namespace llvm;

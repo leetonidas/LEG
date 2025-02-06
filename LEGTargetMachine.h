@@ -9,7 +9,7 @@ namespace llvm {
 
 class LEGTargetMachine : public LLVMTargetMachine {
 public:
-	LEGTargetMachine(const Target &T, const Triple &TT, StringRef CPU, StringRef FS, const TargetOptions &Options, std::optional<Reloc::Model> RM, std::optional<CodeModel::Model> CM, CodeGenOpt::Level OptLevel, bool JIT);
+	LEGTargetMachine(const Target &T, const Triple &TT, StringRef CPU, StringRef FS, const TargetOptions &Options, std::optional<Reloc::Model> RM, std::optional<CodeModel::Model> CM, CodeGenOptLevel OptLevel, bool JIT);
 
 	const LEGSubtarget *getSubtargetImpl(const Function &F) const override;
 	const LEGSubtarget *getSubtargetImpl() const = delete;

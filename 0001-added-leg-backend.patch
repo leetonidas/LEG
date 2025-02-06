@@ -1,0 +1,216 @@
+From 0f975fde94d80df5c804157c7d1595e66e24c1b2 Mon Sep 17 00:00:00 2001
+From: Clemens Jonischkeit <iead@leaddev.de>
+Date: Thu, 6 Feb 2025 16:30:44 +0100
+Subject: [PATCH 1/2] added leg backend
+
+---
+ llvm/include/llvm/BinaryFormat/ELF.h             |  6 ++++++
+ llvm/include/llvm/BinaryFormat/ELFRelocs/LEG.def |  8 ++++++++
+ llvm/include/llvm/Object/ELFObjectFile.h         |  4 ++++
+ llvm/include/llvm/TargetParser/Triple.h          |  1 +
+ llvm/lib/BinaryFormat/ELF.cpp                    |  3 +++
+ llvm/lib/Object/ELF.cpp                          |  7 +++++++
+ llvm/lib/TargetParser/Triple.cpp                 | 11 +++++++++++
+ 7 files changed, 40 insertions(+)
+ create mode 100644 llvm/include/llvm/BinaryFormat/ELFRelocs/LEG.def
+
+diff --git a/llvm/include/llvm/BinaryFormat/ELF.h b/llvm/include/llvm/BinaryFormat/ELF.h
+index 456cffff6..cb8948901 100644
+--- a/llvm/include/llvm/BinaryFormat/ELF.h
++++ b/llvm/include/llvm/BinaryFormat/ELF.h
+@@ -321,6 +321,7 @@ enum {
+   EM_VE = 251,            // NEC SX-Aurora VE
+   EM_CSKY = 252,          // C-SKY 32-bit processor
+   EM_LOONGARCH = 258,     // LoongArch
++  EM_LEG = 512            // Ieads LEG architecture
+ };
+ 
+ // Object file classes.
+@@ -1018,6 +1019,11 @@ enum {
+ #include "ELFRelocs/Xtensa.def"
+ };
+ 
++// ELF Relocation for LEG
++enum {
++#include "ELFRelocs/LEG.def"
++};
++
+ #undef ELF_RELOC
+ 
+ // Section header.
+diff --git a/llvm/include/llvm/BinaryFormat/ELFRelocs/LEG.def b/llvm/include/llvm/BinaryFormat/ELFRelocs/LEG.def
+new file mode 100644
+index 000000000..23f71e57e
+--- /dev/null
++++ b/llvm/include/llvm/BinaryFormat/ELFRelocs/LEG.def
+@@ -0,0 +1,8 @@
++#ifndef ELF_RELOC
++#error "ELF_RELOC must be defined"
++#endif
++
++ELF_RELOC(R_LEG_NONE, 0)
++ELF_RELOC(R_LEG_IMM64, 1)
++ELF_RELOC(R_LEG_PCREL_BR22, 2)
++ELF_RELOC(R_LEG_PCREL_BR27, 3)
+\ No newline at end of file
+diff --git a/llvm/include/llvm/Object/ELFObjectFile.h b/llvm/include/llvm/Object/ELFObjectFile.h
+index 811943dcd..4c61fd058 100644
+--- a/llvm/include/llvm/Object/ELFObjectFile.h
++++ b/llvm/include/llvm/Object/ELFObjectFile.h
+@@ -1348,6 +1348,8 @@ StringRef ELFObjectFile<ELFT>::getFileFormatName() const {
+       return "elf64-ve";
+     case ELF::EM_LOONGARCH:
+       return "elf64-loongarch";
++    case ELF::EM_LEG:
++      return "elf64-leg";
+     default:
+       return "elf64-unknown";
+     }
+@@ -1401,6 +1403,8 @@ template <class ELFT> Triple::ArchType ELFObjectFile<ELFT>::getArch() const {
+     default:
+       report_fatal_error("Invalid ELFCLASS!");
+     }
++  case ELF::EM_LEG:
++    return Triple::leg;
+   case ELF::EM_S390:
+     return Triple::systemz;
+ 
+diff --git a/llvm/include/llvm/TargetParser/Triple.h b/llvm/include/llvm/TargetParser/Triple.h
+index d2126a03d..95fa926e7 100644
+--- a/llvm/include/llvm/TargetParser/Triple.h
++++ b/llvm/include/llvm/TargetParser/Triple.h
+@@ -74,6 +74,7 @@ public:
+     amdgcn,         // AMDGCN: AMD GCN GPUs
+     riscv32,        // RISC-V (32-bit): riscv32
+     riscv64,        // RISC-V (64-bit): riscv64
++    leg,            // Ieads LEG architecture
+     sparc,          // Sparc: sparc
+     sparcv9,        // Sparcv9: Sparcv9
+     sparcel,        // Sparc: (endianness = little). NB: 'Sparcle' is a CPU variant
+diff --git a/llvm/lib/BinaryFormat/ELF.cpp b/llvm/lib/BinaryFormat/ELF.cpp
+index 9878f5769..e58fb5bf7 100644
+--- a/llvm/lib/BinaryFormat/ELF.cpp
++++ b/llvm/lib/BinaryFormat/ELF.cpp
+@@ -192,6 +192,7 @@ uint16_t ELF::convertArchNameToEMachine(StringRef Arch) {
+       .Case("csr_kalimba", EM_CSR_KALIMBA)
+       .Case("amdgpu", EM_AMDGPU)
+       .Case("riscv", EM_RISCV)
++      .Case("leg", EM_LEG)
+       .Case("lanai", EM_LANAI)
+       .Case("bpf", EM_BPF)
+       .Case("ve", EM_VE)
+@@ -553,6 +554,8 @@ StringRef ELF::convertEMachineToArchName(uint16_t EMachine) {
+     return "amdgpu";
+   case EM_RISCV:
+     return "riscv";
++  case EM_LEG:
++    return "leg";
+   case EM_LANAI:
+     return "lanai";
+   case EM_BPF:
+diff --git a/llvm/lib/Object/ELF.cpp b/llvm/lib/Object/ELF.cpp
+index e47a40b87..a93104ddc 100644
+--- a/llvm/lib/Object/ELF.cpp
++++ b/llvm/lib/Object/ELF.cpp
+@@ -116,6 +116,13 @@ StringRef llvm::object::getELFRelocationTypeName(uint32_t Machine,
+       break;
+     }
+     break;
++  case ELF::EM_LEG:
++    switch (Type) {
++#include "llvm/BinaryFormat/ELFRelocs/LEG.def"
++    default:
++      break;
++    }
++    break;
+   case ELF::EM_S390:
+     switch (Type) {
+ #include "llvm/BinaryFormat/ELFRelocs/SystemZ.def"
+diff --git a/llvm/lib/TargetParser/Triple.cpp b/llvm/lib/TargetParser/Triple.cpp
+index 21d6c74b5..3109e7a27 100644
+--- a/llvm/lib/TargetParser/Triple.cpp
++++ b/llvm/lib/TargetParser/Triple.cpp
+@@ -65,6 +65,7 @@ StringRef Triple::getArchTypeName(ArchType Kind) {
+   case renderscript64: return "renderscript64";
+   case riscv32:        return "riscv32";
+   case riscv64:        return "riscv64";
++  case leg:            return "leg";
+   case shave:          return "shave";
+   case sparc:          return "sparc";
+   case sparcel:        return "sparcel";
+@@ -224,6 +225,8 @@ StringRef Triple::getArchTypePrefix(ArchType Kind) {
+   case riscv32:
+   case riscv64:     return "riscv";
+ 
++  case leg:         return "leg";
++
+   case ve:          return "ve";
+   case csky:        return "csky";
+ 
+@@ -421,6 +424,7 @@ Triple::ArchType Triple::getArchTypeForLLVMName(StringRef Name) {
+     .Case("amdgcn", amdgcn)
+     .Case("riscv32", riscv32)
+     .Case("riscv64", riscv64)
++    .Case("leg", leg)
+     .Case("hexagon", hexagon)
+     .Case("sparc", sparc)
+     .Case("sparcel", sparcel)
+@@ -569,6 +573,7 @@ static Triple::ArchType parseArch(StringRef ArchName) {
+           .Case("amdgcn", Triple::amdgcn)
+           .Case("riscv32", Triple::riscv32)
+           .Case("riscv64", Triple::riscv64)
++          .Case("leg", Triple::leg)
+           .Case("hexagon", Triple::hexagon)
+           .Cases("s390x", "systemz", Triple::systemz)
+           .Case("sparc", Triple::sparc)
+@@ -933,6 +938,7 @@ static Triple::ObjectFormatType getDefaultFormat(const Triple &T) {
+   case Triple::renderscript64:
+   case Triple::riscv32:
+   case Triple::riscv64:
++  case Triple::leg:
+   case Triple::shave:
+   case Triple::sparc:
+   case Triple::sparcel:
+@@ -1654,6 +1660,7 @@ unsigned Triple::getArchPointerBitWidth(llvm::Triple::ArchType Arch) {
+   case llvm::Triple::ppc64le:
+   case llvm::Triple::renderscript64:
+   case llvm::Triple::riscv64:
++  case llvm::Triple::leg:
+   case llvm::Triple::sparcv9:
+   case llvm::Triple::spirv:
+   case llvm::Triple::spir64:
+@@ -1685,6 +1692,7 @@ Triple Triple::get32BitArchVariant() const {
+   case Triple::UnknownArch:
+   case Triple::amdgcn:
+   case Triple::avr:
++  case Triple::leg:
+   case Triple::bpfeb:
+   case Triple::bpfel:
+   case Triple::msp430:
+@@ -1799,6 +1807,7 @@ Triple Triple::get64BitArchVariant() const {
+   case Triple::ppc64le:
+   case Triple::renderscript64:
+   case Triple::riscv64:
++  case Triple::leg:
+   case Triple::sparcv9:
+   case Triple::spir64:
+   case Triple::spirv64:
+@@ -1869,6 +1878,7 @@ Triple Triple::getBigEndianArchVariant() const {
+   case Triple::renderscript64:
+   case Triple::riscv32:
+   case Triple::riscv64:
++  case Triple::leg:
+   case Triple::shave:
+   case Triple::spir64:
+   case Triple::spir:
+@@ -1978,6 +1988,7 @@ bool Triple::isLittleEndian() const {
+   case Triple::renderscript64:
+   case Triple::riscv32:
+   case Triple::riscv64:
++  case Triple::leg:
+   case Triple::shave:
+   case Triple::sparcel:
+   case Triple::spir64:
+-- 
+2.48.1
+
